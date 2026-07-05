@@ -4,6 +4,10 @@ on:
   push:
     branches: [ main ]
 
+env:
+  AWS_REGION: us-east-1
+  SG_ID: sg-0cb01e345e7e5eff7
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -13,6 +17,24 @@ jobs:
 
       - name: Test - syntax check
         run: node --check server.js
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get runner public IP
+        id: ip
+        run: echo "ip=$(curl -s https://checkip.amazonaws.com)" >> "$GITHUB_OUTPUT"
+
+      - name: Open SSH for runner IP
+        run: |
+          aws ec2 authorize-security-group-ingress \
+            --group-id "$SG_ID" \
+            --protocol tcp --port 22 \
+            --cidr "${{ steps.ip.outputs.ip }}/32"
 
       - name: Copy files to EC2
         uses: appleboy/scp-action@v0.1.7
@@ -32,3 +54,17 @@ jobs:
           script: |
             chmod +x /home/ubuntu/deploy/deploy.sh
             /home/ubuntu/deploy/deploy.sh
+
+      - name: Health check
+        run: |
+          sleep 5
+          curl -sf http://${{ secrets.EC2_HOST }}/ | grep -q "DevOps Assignment App"
+          echo "Health check passed"
+
+      - name: Close SSH for runner IP
+        if: always()
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id "$SG_ID" \
+            --protocol tcp --port 22 \
+            --cidr "${{ steps.ip.outputs.ip }}/32" || true
